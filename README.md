@@ -10,30 +10,50 @@ See `architecture.md` for the shape of the system and `plan.md` for the build or
 - Python 3.10+ with `requests` and `mysql-connector-python`
 - CelesTrak GP JSON (cached under `cache/` while developing)
 
-## Quick start
+## Quick Start (Linux)
 
-```powershell
+Clone and run the automated installer:
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+This automatically:
+- Checks Python 3.8+ and Docker
+- Configures `.env`
+- Starts the MariaDB container (`docker compose up -d`)
+- Sets up `.venv` and installs dependencies
+- Bootstraps the database schema and ingests telemetry
+- Installs the global `ois` and `satellites` commands in `~/.local/bin/` and creates `./ois`
+
+Once installed, you can launch the system from anywhere by typing `ois` or `./ois`.
+
+---
+
+## Manual Setup (Cross-Platform)
+
+```bash
 # 1. Database
 docker compose up -d
 
 # 2. Python env
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python3 -m venv .venv
+source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# 3. Schema + dummy rows
+# 3. Environment
+cp .env.example .env
+
+# 4. Schema + dummy rows
 python -m app --init-db
 
-# 4. Ingest (uses cache if present; --live hits CelesTrak)
-python -m app --sync --live
+# 5. Ingest (uses cache if present; --live hits CelesTrak)
+python -m app --sync
 
-# 5. Demo
-python -m app --alerts
-python -m app --report operator
+# 6. Launch
 python -m app
 ```
-
-Default connection: `ois` / `ois` @ `127.0.0.1:3306` / `ois_db`. Override with a `.env` copied from `.env.example`.
 
 ## CLI menu
 
