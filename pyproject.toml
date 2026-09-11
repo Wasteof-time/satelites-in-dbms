@@ -1,0 +1,17 @@
+[project]
+name = "satelites-in-dbms"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Aadi Vibhuti", email = "aadivibhuti10@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+satelites-in-dbms = "satelites_in_dbms:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
