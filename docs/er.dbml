@@ -1,0 +1,87 @@
+// Paste into https://dbdiagram.io
+// OIS — Orbital Intelligence System
+
+Table Satellite {
+  Satellite_ID int [pk, increment]
+  NORAD_ID varchar(16) [unique, not null]
+  Name varchar(120) [not null]
+  Operator varchar(120)
+  Status varchar(16) [not null]
+  Launch_Date date
+}
+
+Table Orbit_Parameters {
+  Satellite_ID int [pk, ref: - Satellite.Satellite_ID]
+  Inclination decimal
+  Eccentricity decimal
+  Apogee_km decimal
+  Perigee_km decimal
+  Epoch datetime
+}
+
+Table Position_History {
+  Position_ID int [pk, increment]
+  Satellite_ID int [ref: > Satellite.Satellite_ID]
+  Observed_At datetime
+  Lat decimal
+  Lon decimal
+  Alt_km decimal
+}
+
+Table Maneuvers {
+  Maneuver_ID int [pk, increment]
+  Satellite_ID int [ref: > Satellite.Satellite_ID]
+  Maneuver_At datetime
+  Type varchar(60)
+  Notes varchar(255)
+}
+
+Table Collision_Alerts {
+  Alert_ID int [pk, increment]
+  Object_A_ID int [ref: > Satellite.Satellite_ID]
+  Object_B_ID int [ref: > Satellite.Satellite_ID]
+  Probability decimal
+  Distance_km decimal
+  Detected_At datetime
+  Status varchar(16)
+}
+
+Table Debris_Records {
+  Debris_ID int [pk, increment]
+  Parent_Satellite_ID int [ref: > Satellite.Satellite_ID]
+  Catalog_ID varchar(16) [unique]
+  First_Seen datetime
+  Status varchar(16)
+}
+
+Table Comm_Satellite {
+  Satellite_ID int [pk, ref: - Satellite.Satellite_ID]
+  Band varchar(40)
+  Transponders int
+}
+
+Table Nav_Satellite {
+  Satellite_ID int [pk, ref: - Satellite.Satellite_ID]
+  Constellation varchar(40)
+  Signal_Type varchar(40)
+}
+
+Table EO_Satellite {
+  Satellite_ID int [pk, ref: - Satellite.Satellite_ID]
+  Sensor varchar(60)
+  Resolution_m decimal
+}
+
+Table Sci_Satellite {
+  Satellite_ID int [pk, ref: - Satellite.Satellite_ID]
+  Mission varchar(80)
+  Instrument varchar(80)
+}
+
+Table Sync_Log {
+  Sync_ID int [pk, increment]
+  Synced_At datetime
+  Source varchar(80)
+  Rows_Upserted int
+  Status varchar(16)
+}

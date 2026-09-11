@@ -207,14 +207,21 @@ Not created in this docs step. Later phases add these paths:
 ├── architecture.md
 ├── plan.md
 ├── project.md
+├── README.md
+├── docker-compose.yml     # MariaDB 11 (ois / ois / ois_db)
 ├── sql/
-│   └── schema.sql
+│   ├── schema.sql
+│   └── seed.sql
 ├── ingest/
 │   └── celestrak.py
 ├── app/
+│   ├── db.py
 │   ├── cli.py
 │   └── queries.py
-└── cache/                 # local CelesTrak JSON while developing
+├── cache/                 # local CelesTrak JSON while developing
+└── docs/
+    ├── viva.md
+    └── er.dbml            # paste into dbdiagram.io
 ```
 
 ---
