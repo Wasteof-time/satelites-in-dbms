@@ -1,10 +1,9 @@
-"""Menu-driven CLI for the Orbital Intelligence System."""
+"""Menu-driven CLI for the Orbital Intelligence System with modern terminal UI."""
 
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,237 +14,304 @@ from mysql.connector import Error as MySQLError
 
 from app.db import init_schema, ping, settings
 from app import queries
+from app import art
+from app import ui
 from ingest.celestrak import sync as ingest_sync
 
 
-def _fmt(value) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M")
-    if isinstance(value, float):
-        return f"{value:.4f}".rstrip("0").rstrip(".")
-    return str(value)
+def print_table(rows: list[dict], columns: list[tuple[str, str]] | None = None, title: str | None = None) -> None:
+    """Wrapper for backward compatibility, delegates to ui.print_box_table."""
+    ui.print_box_table(rows, columns=columns, title=title)
 
 
-def print_table(rows: list[dict], columns: list[tuple[str, str]] | None = None) -> None:
-    if not rows:
-        print("  (no rows)")
-        return
-    if columns is None:
-        keys = list(rows[0].keys())
-        columns = [(k, k) for k in keys]
-    widths = []
-    for key, header in columns:
-        width = len(header)
-        for row in rows:
-            width = max(width, len(_fmt(row.get(key))))
-        widths.append(min(width, 36))
-    header_line = "  ".join(header.ljust(w) for (_, header), w in zip(columns, widths))
-    rule = "  ".join("-" * w for w in widths)
-    print(header_line)
-    print(rule)
-    for row in rows:
-        print(
-            "  ".join(_fmt(row.get(key))[:w].ljust(w) for (key, _), w in zip(columns, widths))
-        )
-
-
-def banner() -> None:
+def banner(show_art: bool = True, art_mode: str = "clean") -> None:
     cfg = settings()
     print()
-    print("=" * 56)
-    print("  Orbital Intelligence System")
-    print(f"  {cfg['database']} @ {cfg['host']}:{cfg['port']}")
-    print("=" * 56)
+    if show_art:
+        print(art.render_satellite_art(mode=art_mode, indent=2))
+        print()
+
+    b = lambda t: ui.color(t, ui.CLR_BORDER)
+    w = 74
+    inner = w - 2
+
+    title_text = "🛰️   ORBITAL INTELLIGENCE SYSTEM"
+    sub_text = "MariaDB Telemetry & Orbital Dynamics Tracking Catalog"
+    db_text = f"Connected: {cfg['database']} @ {cfg['host']}:{cfg['port']}"
+
+    top = "  " + b("╭" + "─" * inner + "╮")
+    line1 = "  " + b("│") + ui.pad(ui.color(ui.pad(title_text, inner, align="center"), ui.CLR_CYAN_BOLD), inner) + b("│")
+    line2 = "  " + b("│") + ui.pad(ui.color(ui.pad(sub_text, inner, align="center"), ui.CLR_DIM), inner) + b("│")
+    line3 = "  " + b("│") + ui.pad(ui.color(ui.pad(db_text, inner, align="center"), ui.CLR_BLUE), inner) + b("│")
+    bot = "  " + b("╰" + "─" * inner + "╯")
+
+    print(top)
+    print(line1)
+    print(line2)
+    print(line3)
+    print(bot)
 
 
 def menu() -> None:
-    print()
-    print("  1) View satellite")
-    print("  2) Search")
-    print("  3) View alerts")
-    print("  4) Sync from API / cache")
-    print("  5) Generate report")
-    print("  6) Exit")
+    b = lambda t: ui.color(t, ui.CLR_BORDER)
+    c_num = lambda t: ui.color(f"[{t}]", ui.CLR_CYAN_BOLD)
+    w = 74
+    inner = w - 2
+
+    def menu_row(num: str, icon: str, title: str, desc: str) -> str:
+        row_content = f"  {c_num(num)} {icon}  {ui.color(title.ljust(21), ui.CLR_BOLD)} {ui.color(desc, ui.CLR_DIM)}"
+        return "  " + b("│") + ui.pad(row_content, inner) + b("│")
+
+    top = "\n  " + b("╭─") + ui.color(" 🛰️  MISSION CONTROL CONSOLE ", ui.CLR_HEADER) + b("─" * (w - 32)) + b("╮")
+    bot = "  " + b("╰" + "─" * inner + "╯")
+
+    print(top)
+    print(menu_row("1", "🔭", "View Satellite", "Detailed telemetry card by NORAD/Name"))
+    print(menu_row("2", "🔍", "Search Fleet", "Filter by Operator, Status, or Type"))
+    print(menu_row("3", "⚠️", "Collision Alerts", "Active proximity warnings & risk"))
+    print(menu_row("4", "🔄", "Sync Telemetry", "Ingest from CelesTrak API or cache"))
+    print(menu_row("5", "📊", "Analytics & Reports", "Fleet stats, debris & trajectory"))
+    print(menu_row("6", "🎨", "Satellite ASCII Art", "Render spacecraft in multiple modes"))
+    print(menu_row("q", "🚪", "Exit Console", "Close session and return to shell"))
+    print(bot)
 
 
 def view_flow() -> None:
-    term = input("  NORAD ID or name: ").strip()
+    prompt = ui.color("  ▸ Enter NORAD ID or satellite name: ", ui.CLR_CYAN)
+    term = input(prompt).strip()
     if not term:
-        print("  Nothing entered.")
+        print(ui.color("  [!] No search term entered.", ui.CLR_YELLOW))
         return
     sat = queries.view_satellite(term)
     if not sat:
-        print(f"  No satellite matched '{term}'.")
+        print(ui.color(f"  [x] No satellite matched '{term}'.", ui.CLR_RED))
         return
-    print()
-    print(f"  {sat['Name']}  NORAD {sat['NORAD_ID']}  [{sat['Sat_Type']}]")
-    print(f"  Operator : {_fmt(sat['Operator'])}")
-    print(f"  Status   : {_fmt(sat['Status'])}    Launch: {_fmt(sat['Launch_Date'])}")
-    print(
-        f"  Orbit    : i={_fmt(sat['Inclination'])}°  e={_fmt(sat['Eccentricity'])}  "
-        f"apogee={_fmt(sat['Apogee_km'])} km  perigee={_fmt(sat['Perigee_km'])} km"
-    )
-    print(f"  Epoch    : {_fmt(sat['Epoch'])}")
-    if sat["Sat_Type"] == "comm":
-        print(f"  Comm     : band={_fmt(sat['Band'])}  transponders={_fmt(sat['Transponders'])}")
-    elif sat["Sat_Type"] == "nav":
-        print(f"  Nav      : {_fmt(sat['Constellation'])}  {_fmt(sat['Signal_Type'])}")
-    elif sat["Sat_Type"] == "eo":
-        print(f"  EO       : sensor={_fmt(sat['Sensor'])}  res={_fmt(sat['Resolution_m'])} m")
-    elif sat["Sat_Type"] == "sci":
-        print(f"  Science  : {_fmt(sat['Mission'])} / {_fmt(sat['Instrument'])}")
-    print("  Recent positions:")
-    print_table(
-        sat["recent_positions"],
-        [("Observed_At", "When"), ("Lat", "Lat"), ("Lon", "Lon"), ("Alt_km", "Alt km")],
-    )
-    if sat["maneuvers"]:
-        print("  Maneuvers:")
-        print_table(
+
+    ui.print_telemetry_card(sat)
+
+    if sat.get("recent_positions"):
+        print()
+        ui.print_box_table(
+            sat["recent_positions"],
+            [
+                ("Observed_At", "Observed At (UTC)"),
+                ("Lat", "Latitude"),
+                ("Lon", "Longitude"),
+                ("Alt_km", "Altitude (km)"),
+            ],
+            title="RECENT ORBITAL SAMPLES",
+        )
+
+    if sat.get("maneuvers"):
+        print()
+        ui.print_box_table(
             sat["maneuvers"],
-            [("Maneuver_At", "When"), ("Type", "Type"), ("Notes", "Notes")],
+            [("Maneuver_At", "Timestamp"), ("Type", "Maneuver Type"), ("Notes", "Flight Log Notes")],
+            title="LOGGED ORBITAL MANEUVERS",
         )
 
 
 def search_flow() -> None:
-    operator = input("  Operator contains (blank = any): ").strip() or None
-    status = input("  Status [active/inactive/decayed/unknown, blank = any]: ").strip() or None
-    sat_type = input("  Type [comm/nav/eo/sci, blank = any]: ").strip() or None
-    rows = queries.search_satellites(operator=operator, status=status, sat_type=sat_type)
+    print(ui.color("\n  ▸ Filter Satellite Catalog (Press ENTER to leave blank):", ui.CLR_BLUE_BOLD))
+    op = input(ui.color("    Operator substring : ", ui.CLR_CYAN)).strip() or None
+    st = input(ui.color("    Status [active/inactive/decayed] : ", ui.CLR_CYAN)).strip() or None
+    ty = input(ui.color("    Type [comm/nav/eo/sci] : ", ui.CLR_CYAN)).strip() or None
+
+    rows = queries.search_satellites(operator=op, status=st, sat_type=ty)
     print()
-    print_table(
+    ui.print_box_table(
         rows,
         [
             ("NORAD_ID", "NORAD"),
-            ("Name", "Name"),
+            ("Name", "Satellite Name"),
             ("Operator", "Operator"),
             ("Status", "Status"),
             ("Sat_Type", "Type"),
             ("Inclination", "Incl"),
-            ("Apogee_km", "Apogee"),
-            ("Perigee_km", "Perigee"),
+            ("Apogee_km", "Apogee (km)"),
+            ("Perigee_km", "Perigee (km)"),
         ],
+        title=f"SEARCH RESULTS ({len(rows)} SATELLITES)",
     )
-    print(f"  {len(rows)} satellite(s)")
 
 
 def alerts_flow() -> None:
-    refresh = input("  Recalculate from latest positions? [y/N]: ").strip().lower()
+    recalc_prompt = ui.color("  ▸ Recalculate conjunctions from latest positions? [y/N]: ", ui.CLR_YELLOW)
+    refresh = input(recalc_prompt).strip().lower()
     if refresh == "y":
         made = queries.generate_collision_alerts()
-        print(f"  Wrote {len(made)} alert(s).")
+        print(ui.color(f"  ✔ Generated and logged {len(made)} conjunction alert(s).", ui.CLR_GREEN))
+
     rows = queries.list_alerts()
     print()
-    print_table(
+    ui.print_box_table(
         rows,
         [
-            ("Detected_At", "When"),
-            ("Status", "Status"),
-            ("Object_A", "Object A"),
-            ("Object_B", "Object B"),
-            ("Distance_km", "Dist km"),
-            ("Probability", "P %"),
+            ("Detected_At", "Timestamp (UTC)"),
+            ("Status", "Conjunction_Status"),
+            ("Object_A", "Object Alpha"),
+            ("Object_B", "Object Bravo"),
+            ("Distance_km", "Separation (km)"),
+            ("Probability", "Collision Prob"),
         ],
+        title=f"ACTIVE CONJUNCTION ALERTS ({len(rows)} EVENTS)",
     )
 
 
 def sync_flow() -> None:
-    choice = input("  Source [cache/live] (default cache): ").strip().lower() or "cache"
+    prompt = ui.color("  ▸ Ingestion source [cache/live] (default: cache): ", ui.CLR_CYAN)
+    choice = input(prompt).strip().lower() or "cache"
     live = choice == "live"
-    print("  Syncing…")
+    print(ui.color("  ⏳ Syncing telemetry with CelesTrak...", ui.CLR_BLUE))
     result = ingest_sync(live=live)
     print(
-        f"  {result['status']}: {result['upserted']} satellites, "
-        f"{result['history']} positions, {result['debris']} debris "
-        f"({result['source']})"
+        ui.color(
+            f"  ✔ Sync {result['status'].upper()}: {result['upserted']} satellites, "
+            f"{result['history']} positions, {result['debris']} debris "
+            f"({result['source']})",
+            ui.CLR_GREEN,
+        )
     )
     made = queries.generate_collision_alerts()
-    print(f"  Collision check: {len(made)} pair(s) stored.")
+    print(ui.color(f"  ✔ Automated collision scan: {len(made)} close pairs evaluated and stored.", ui.CLR_CYAN))
 
 
 def report_flow() -> None:
-    print("  a) Satellites by operator")
-    print("  b) Satellites by type")
-    print("  c) Debris count trend")
-    print("  d) Trajectory projection")
-    print("  e) Sync log")
-    pick = input("  Report: ").strip().lower()
+    b = lambda t: ui.color(t, ui.CLR_BORDER)
+    w = 64
+    inner = w - 2
+
+    top = "\n  " + b("╭─") + ui.color(" 📊 ANALYTICAL REPORTS ", ui.CLR_HEADER) + b("─" * (w - 24)) + b("╮")
+    bot = "  " + b("╰" + "─" * inner + "╯")
+
+    print(top)
+    print("  " + b("│") + ui.pad(f"  {ui.color('[a]', ui.CLR_CYAN_BOLD)} Fleet Breakdown by Operator", inner) + b("│"))
+    print("  " + b("│") + ui.pad(f"  {ui.color('[b]', ui.CLR_CYAN_BOLD)} Fleet Breakdown by Satellite Type", inner) + b("│"))
+    print("  " + b("│") + ui.pad(f"  {ui.color('[c]', ui.CLR_CYAN_BOLD)} Orbital Debris Historical Accumulation", inner) + b("│"))
+    print("  " + b("│") + ui.pad(f"  {ui.color('[d]', ui.CLR_CYAN_BOLD)} Linear Trajectory Extrapolation (+N min)", inner) + b("│"))
+    print("  " + b("│") + ui.pad(f"  {ui.color('[e]', ui.CLR_CYAN_BOLD)} Telemetry Sync Audit Log", inner) + b("│"))
+    print("  " + b("│") + ui.pad(f"  {ui.color('[back]', ui.CLR_DIM)} Return to Main Console", inner) + b("│"))
+    print(bot)
+
+    pick = input(ui.color("  ▸ Select report [a-e]: ", ui.CLR_CYAN)).strip().lower()
     print()
     if pick == "a":
-        print_table(queries.report_by_operator())
+        ui.print_box_table(
+            queries.report_by_operator(),
+            [("Operator", "Fleet Operator"), ("Satellites", "Total Satellites"), ("Active", "Active Operational")],
+            title="OPERATOR FLEET DISTRIBUTION",
+        )
     elif pick == "b":
-        print_table(queries.report_by_type())
+        ui.print_box_table(
+            queries.report_by_type(),
+            [("Sat_Type", "Mission Type"), ("Satellites", "Total Satellites")],
+            title="SATELLITE MISSION SPECIALIZATIONS",
+        )
     elif pick == "c":
-        print_table(queries.report_debris_trend())
+        ui.print_box_table(
+            queries.report_debris_trend(),
+            [("Day", "Catalog Date"), ("Debris_Count", "Tracked Objects"), ("Status", "Tracking Status")],
+            title="SPACE DEBRIS OBSERVATIONS",
+        )
     elif pick == "d":
-        term = input("  NORAD ID or name: ").strip()
-        minutes = input("  Minutes ahead (default 10): ").strip()
-        minutes_n = int(minutes) if minutes.isdigit() else 10
+        term = input(ui.color("  ▸ Enter NORAD ID or satellite name: ", ui.CLR_CYAN)).strip()
+        min_in = input(ui.color("  ▸ Extrapolation minutes ahead (default 10): ", ui.CLR_CYAN)).strip()
+        minutes_n = int(min_in) if min_in.isdigit() else 10
         proj = queries.project_trajectory(term, minutes=minutes_n)
         if not proj:
-            print("  No satellite matched.")
+            print(ui.color(f"  [x] No satellite matched '{term}'.", ui.CLR_RED))
             return
         if "reason" in proj:
-            print(f"  {proj['reason']}")
+            print(ui.color(f"  [!] {proj['reason']}", ui.CLR_YELLOW))
             return
-        print(f"  {proj['Name']}  NORAD {proj['NORAD_ID']}")
-        print(f"  Last two samples → +{proj['minutes']} min")
-        print_table(
+
+        print(ui.color(f"  🛰️  {proj['Name']} (NORAD {proj['NORAD_ID']}) — Projected +{proj['minutes']} Minutes Ahead", ui.CLR_CYAN_BOLD))
+        rows = [
+            {"Point": "T-Older", **{k: proj["from"][k] for k in ("Observed_At", "Lat", "Lon", "Alt_km")}},
+            {"Point": "T-Latest", **{k: proj["to"][k] for k in ("Observed_At", "Lat", "Lon", "Alt_km")}},
+            {
+                "Point": "T-Projected",
+                "Observed_At": proj.get("projected_at"),
+                **proj["projected"],
+            },
+        ]
+        ui.print_box_table(
+            rows,
             [
-                {"label": "older", **{k: proj["from"][k] for k in ("Observed_At", "Lat", "Lon", "Alt_km")}},
-                {"label": "newer", **{k: proj["to"][k] for k in ("Observed_At", "Lat", "Lon", "Alt_km")}},
-                {
-                    "label": "projected",
-                    "Observed_At": proj.get("projected_at"),
-                    **proj["projected"],
-                },
+                ("Point", "Reference Point"),
+                ("Observed_At", "Timestamp"),
+                ("Lat", "Latitude"),
+                ("Lon", "Longitude"),
+                ("Alt_km", "Altitude (km)"),
             ],
-            [
-                ("label", ""),
-                ("Observed_At", "When"),
-                ("Lat", "Lat"),
-                ("Lon", "Lon"),
-                ("Alt_km", "Alt km"),
-            ],
+            title="TRAJECTORY EXTRAPOLATION",
         )
-        print(f"  Note: {proj['note']}")
+        print(ui.color(f"  Note: {proj['note']}", ui.CLR_DIM))
     elif pick == "e":
-        print_table(queries.sync_log())
+        ui.print_box_table(
+            queries.sync_log(),
+            [
+                ("Sync_ID", "ID"),
+                ("Synced_At", "Timestamp (UTC)"),
+                ("Source", "Ingest Source"),
+                ("Rows_Upserted", "Upserted"),
+                ("Status", "Status"),
+            ],
+            title="TELEMETRY INGESTION AUDIT LOG",
+        )
+    elif pick in ("back", "q", "exit", ""):
+        return
     else:
-        print("  Unknown report.")
+        print(ui.color("  [!] Unknown report selection.", ui.CLR_YELLOW))
+
+
+def art_flow() -> None:
+    print(ui.color("\n  ▸ Satellite ASCII Art Showcase Modes:", ui.CLR_BLUE_BOLD))
+    print(f"    {ui.color('[1]', ui.CLR_CYAN_BOLD)} Clean Spaces (High-contrast cyan & electric blue gradient)")
+    print(f"    {ui.color('[2]', ui.CLR_CYAN_BOLD)} Cosmic Stars (Deep-space background dots with glowing satellite)")
+    print(f"    {ui.color('[3]', ui.CLR_CYAN_BOLD)} Raw Verbatim (Original characters exactly as supplied)")
+    mode_in = input(ui.color("  ▸ Select rendering mode [1-3] (default 1): ", ui.CLR_CYAN)).strip()
+    mode_map = {"1": "clean", "2": "stars", "3": "raw", "clean": "clean", "stars": "stars", "raw": "raw"}
+    selected_mode = mode_map.get(mode_in, "clean")
+    print()
+    print(art.render_satellite_art(mode=selected_mode, indent=2))
+    print()
 
 
 def loop() -> None:
     ping()
-    banner()
+    banner(show_art=True, art_mode="clean")
     while True:
         menu()
-        choice = input("  Select: ").strip()
+        prompt = ui.color("  ois › ", ui.CLR_CYAN_BOLD)
+        choice = input(prompt).strip().lower()
         print()
         try:
-            if choice == "1":
+            if choice in ("1", "view"):
                 view_flow()
-            elif choice == "2":
+            elif choice in ("2", "search"):
                 search_flow()
-            elif choice == "3":
+            elif choice in ("3", "alerts"):
                 alerts_flow()
-            elif choice == "4":
+            elif choice in ("4", "sync"):
                 sync_flow()
-            elif choice == "5":
+            elif choice in ("5", "report", "reports"):
                 report_flow()
-            elif choice == "6":
-                print("  Bye.")
+            elif choice in ("6", "art", "ascii"):
+                art_flow()
+            elif choice in ("q", "7", "exit", "quit"):
+                print(ui.color("  👋 Disconnecting from Orbital Intelligence System. Goodbye.", ui.CLR_CYAN))
                 return
             else:
-                print("  Enter 1–6.")
+                print(ui.color("  [!] Invalid choice. Please enter 1–6 or 'q' to exit.", ui.CLR_YELLOW))
         except MySQLError as exc:
-            print(f"  Database error: {exc}")
+            print(ui.color(f"  [x] Database error: {exc}", ui.CLR_RED))
         except FileNotFoundError as exc:
-            print(f"  {exc}")
+            print(ui.color(f"  [x] File error: {exc}", ui.CLR_RED))
+        except KeyboardInterrupt:
+            print(ui.color("\n  [!] Operation interrupted by user.", ui.CLR_YELLOW))
         except Exception as exc:
-            print(f"  {exc}")
+            print(ui.color(f"  [x] Unexpected error: {exc}", ui.CLR_RED))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,11 +326,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Print a report and exit",
     )
     parser.add_argument("--view", metavar="TERM", help="View a satellite by NORAD or name")
+    parser.add_argument("--art", action="store_true", help="Render the satellite ASCII art and exit")
+    parser.add_argument(
+        "--art-style",
+        choices=["clean", "stars", "raw"],
+        default="clean",
+        help="Visual style for satellite ASCII art (clean, stars, raw)",
+    )
     args = parser.parse_args(argv)
+
+    if args.art:
+        print(art.render_satellite_art(mode=args.art_style, indent=2))
+        return 0
 
     if args.init_db:
         init_schema()
-        print("Schema and seed applied.")
+        print(ui.color("✔ Schema and seed applied successfully.", ui.CLR_GREEN))
         return 0
 
     ping()
@@ -272,43 +349,83 @@ def main(argv: list[str] | None = None) -> int:
     if args.sync:
         result = ingest_sync(live=args.live)
         print(
-            f"Sync {result['status']}: {result['upserted']} satellites, "
-            f"{result['history']} history, {result['debris']} debris ({result['source']})"
+            ui.color(
+                f"Sync {result['status'].upper()}: {result['upserted']} satellites, "
+                f"{result['history']} history, {result['debris']} debris ({result['source']})",
+                ui.CLR_GREEN,
+            )
         )
         queries.generate_collision_alerts()
 
     if args.view:
         sat = queries.view_satellite(args.view)
         if not sat:
-            print(f"No satellite matched '{args.view}'.")
+            print(ui.color(f"[x] No satellite matched '{args.view}'.", ui.CLR_RED))
             return 1
-        print(f"{sat['Name']}  NORAD {sat['NORAD_ID']}  [{sat['Sat_Type']}]  {sat['Operator']}")
+        ui.print_telemetry_card(sat)
+        if sat.get("recent_positions"):
+            print()
+            ui.print_box_table(
+                sat["recent_positions"],
+                [
+                    ("Observed_At", "Observed At (UTC)"),
+                    ("Lat", "Latitude"),
+                    ("Lon", "Longitude"),
+                    ("Alt_km", "Altitude (km)"),
+                ],
+                title="RECENT ORBITAL SAMPLES",
+            )
         return 0
 
     if args.alerts:
         if not args.sync:
             queries.generate_collision_alerts()
-        print_table(
-            queries.list_alerts(),
+        rows = queries.list_alerts()
+        ui.print_box_table(
+            rows,
             [
-                ("Detected_At", "When"),
-                ("Status", "Status"),
-                ("Object_A", "Object A"),
-                ("Object_B", "Object B"),
-                ("Distance_km", "Dist km"),
-                ("Probability", "P %"),
+                ("Detected_At", "Timestamp (UTC)"),
+                ("Status", "Conjunction_Status"),
+                ("Object_A", "Object Alpha"),
+                ("Object_B", "Object Bravo"),
+                ("Distance_km", "Separation (km)"),
+                ("Probability", "Collision Prob"),
             ],
+            title=f"ACTIVE CONJUNCTION ALERTS ({len(rows)} EVENTS)",
         )
         return 0
 
     if args.report:
-        mapping = {
-            "operator": queries.report_by_operator,
-            "type": queries.report_by_type,
-            "debris": queries.report_debris_trend,
-            "sync": queries.sync_log,
-        }
-        print_table(mapping[args.report]())
+        if args.report == "operator":
+            ui.print_box_table(
+                queries.report_by_operator(),
+                [("Operator", "Fleet Operator"), ("Satellites", "Total Satellites"), ("Active", "Active Operational")],
+                title="OPERATOR FLEET DISTRIBUTION",
+            )
+        elif args.report == "type":
+            ui.print_box_table(
+                queries.report_by_type(),
+                [("Sat_Type", "Mission Type"), ("Satellites", "Total Satellites")],
+                title="SATELLITE MISSION SPECIALIZATIONS",
+            )
+        elif args.report == "debris":
+            ui.print_box_table(
+                queries.report_debris_trend(),
+                [("Day", "Catalog Date"), ("Debris_Count", "Tracked Objects"), ("Status", "Tracking Status")],
+                title="SPACE DEBRIS OBSERVATIONS",
+            )
+        elif args.report == "sync":
+            ui.print_box_table(
+                queries.sync_log(),
+                [
+                    ("Sync_ID", "ID"),
+                    ("Synced_At", "Timestamp (UTC)"),
+                    ("Source", "Ingest Source"),
+                    ("Rows_Upserted", "Upserted"),
+                    ("Status", "Status"),
+                ],
+                title="TELEMETRY INGESTION AUDIT LOG",
+            )
         return 0
 
     if args.sync:
